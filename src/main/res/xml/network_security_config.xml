@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 9 (API 28) 起默认禁止明文 HTTP，会直接拦掉对自建积分托管服务端
+  （http://192.168.x.x:8787 这类局域网地址）的请求。
+  这里放开明文 HTTP；对官方接口 i.ilife798.com 仍然走 HTTPS，不受影响。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
