@@ -78,9 +78,34 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
+  preflight:
+    name: Check release signing secrets
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+
+    steps:
+      - name: Check signing secrets
+        id: check
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] \
+             && [ -n "$ANDROID_KEY_ALIAS" ] && [ -n "$ANDROID_KEY_PASSWORD" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::签名 secret 未配置，跳过 CI 发布（使用本地签名包手动建 Release）"
+          fi
+
   release:
     name: Build and publish Android release
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: preflight
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.preflight.outputs.ready == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -156,7 +181,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          EXPECTED_RELEASE_CERT_SHA256: 9bd997fcceb68c970799be397d65f4b9c4628af4bd0050422b230d82f8d9fc92
+          EXPECTED_RELEASE_CERT_SHA256: 0c2bded04217db98f108f3319ada417cc7621df9fac2cdd0065e2a3d5b82a50e
         run: |
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/waterwidget-release.jks"
           keytool -list -v -keystore "$RUNNER_TEMP/waterwidget-release.jks" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" | grep "SHA256:"
