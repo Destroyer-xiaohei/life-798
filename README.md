@@ -1,6 +1,6 @@
 # WaterWidget
 
-WaterWidget 是一个面向慧生活798用户的第三方 Android 设备控制客户端，提供多账户管理、饮水设备启动与停止、钱包充值、用水消费统计、桌面小部件、快捷设置磁贴与设备二维码添加功能。
+WaterWidget 是一个面向慧生活798用户的第三方 Android 设备控制客户端，提供多账户管理、饮水设备启动与停止、钱包充值、用水消费统计、桌面小部件、快捷设置磁贴与设备二维码添加功能。(原项目地址[https://github.com/Destroyer-xiaohei/life-798.git](https://github.com/Destroyer-xiaohei/life-798))
 
 > 非官方项目，与慧生活798服务提供方无关。请仅使用你本人有权访问的账户和设备，并遵守相关服务规则。
 
