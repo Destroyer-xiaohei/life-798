@@ -283,6 +283,39 @@ class IlifeScoreClient:
         self.server_ts = normalize_ts(resp.get("time"), self.local_ts)
         return resp
 
+    # 平台随官方 App 更新抬高最低版本下限：低于下限时返回“请升级最新版app”。
+    # 候选版本按顺序尝试，命中（code=0 或非版本类错误）即采用。
+    VERSION_CANDIDATES = (
+        "3.1.10", "3.1.11", "3.1.12", "3.1.13", "3.1.14", "3.1.15",
+        "3.2.0", "3.2.1", "3.2.2", "3.2.3", "3.2.4", "3.2.5", "3.2.6",
+        "3.3.0", "3.3.1", "3.4.0", "3.5.0", "3.6.0", "3.8.0", "3.9.9",
+        "4.0.0", "9.9.9",
+    )
+
+    @staticmethod
+    def _is_version_issue(msg: str) -> bool:
+        return ("升级" in (msg or "")) or ("版本" in (msg or ""))
+
+    def resolve_version(self, emit: Callable[..., None]) -> Optional[Dict[str, Any]]:
+        """探测一个被服务端接受的客户端版本号，命中后更新 self.version 并返回任务列表响应。"""
+        seen = set()
+        for v in (self.version,) + self.VERSION_CANDIDATES:
+            if not v or v in seen:
+                continue
+            seen.add(v)
+            self.version = v
+            try:
+                resp = self.get_mission_list()
+            except ClaimNetworkError:
+                continue
+            if self.last_code == CODE_OK:
+                emit("info", "客户端版本探测命中 %s" % v)
+                return resp
+            if not self._is_version_issue(self.last_msg):
+                # 非版本类错误（登录过期、限流等），无需继续探测
+                return None
+        return None
+
     def get_score_list(self, page: int = 0, size: int = 200) -> Dict[str, Any]:
         """拉取积分明细，用于统计当天每个任务已经领了多少次。"""
         return self._call(
@@ -363,6 +396,10 @@ class IlifeScoreClient:
                 log(level, message)
 
         resp = self.get_mission_list()
+        if self.last_code != CODE_OK and self._is_version_issue(self.last_msg):
+            resolved = self.resolve_version(emit)
+            if resolved is not None:
+                resp = resolved
         if self.last_code == CODE_TOKEN_EXPIRED:
             raise TokenExpired(self.last_msg or "登录状态已过期")
         if self.last_code != CODE_OK:

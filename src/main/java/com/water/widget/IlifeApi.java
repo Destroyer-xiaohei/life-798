@@ -27,10 +27,25 @@ public class IlifeApi {
     static final String GATEWAY = BuildConfig.API_GATEWAY;
     static final String CID = BuildConfig.API_CID;
     private static final String SIGN_SALT = BuildConfig.SIGN_SALT;
-    // 服务端按客户端版本号做最低版本校验，过低会返回“请升级最新版app”；
-    // 这里与官方客户端（慧生活798）保持一致。
-    private static final String CLIENT_VERSION = "3.1.9";
-    private static final String UA = "Android_ilife798_" + CLIENT_VERSION;
+    // 服务端按客户端版本号做最低版本校验，过低会返回“请升级最新版app”。
+    // 平台会随官方 App 更新抬高下限，因此这里运行时可调，并通过 ensureClientVersion 自动探测
+    // 一个被服务端接受的版本（探测结果会持久化）。
+    public static final String DEFAULT_CLIENT_VERSION = "3.1.9";
+    private static volatile String clientVersion = DEFAULT_CLIENT_VERSION;
+
+    public static String getClientVersion() {
+        return clientVersion;
+    }
+
+    public static void setClientVersion(String version) {
+        if (version != null && !version.trim().isEmpty()) {
+            clientVersion = version.trim();
+        }
+    }
+
+    private static String ua() {
+        return "Android_ilife798_" + clientVersion;
+    }
     private static final String DEVICE_LOGIN_REJECTED_MESSAGE =
             "设备登录信息未被接受，请检查是否填反或重新完成设备登录";
 
@@ -44,6 +59,55 @@ public class IlifeApi {
 
     public interface TextCallback {
         void onResult(String text, String err);
+    }
+
+    public interface VersionCallback {
+        void onResult(String version, String err);
+    }
+
+    // ====== 版本探测 ======
+
+    /**
+     * 平台会随官方 App 更新抬高最低版本下限，过低时所有积分接口都返回“请升级最新版app”。
+     * 这里用只读的 mission-lst 逐个尝试候选版本号，命中后写入 {@link #setClientVersion}。
+     * 命中判定：code==0，或错误信息与“版本/升级”无关（例如登录过期、限流）。
+     */
+    public static void ensureClientVersion(final String token, final VersionCallback cb) {
+        new Thread(() -> {
+            if (token == null || token.isEmpty()) {
+                cb.onResult(clientVersion, null);
+                return;
+            }
+            String[] candidates = {
+                    clientVersion,
+                    "3.1.10", "3.1.11", "3.1.12", "3.1.13", "3.1.14", "3.1.15",
+                    "3.2.0", "3.2.1", "3.2.2", "3.2.3", "3.2.4", "3.2.5", "3.2.6",
+                    "3.3.0", "3.3.1", "3.4.0", "3.5.0", "3.6.0", "3.8.0", "3.9.9",
+                    "4.0.0", "9.9.9"
+            };
+            java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
+            for (String v : candidates) {
+                if (v == null || v.isEmpty() || !seen.add(v)) continue;
+                try {
+                    String body = httpRawApp(
+                            "GET", GATEWAY + "/acc/score/mission-lst", null, token, "1,5", v);
+                    JSONObject json = new JSONObject(body);
+                    int code = json.optInt("code", -999);
+                    String msg = json.optString("msg", "");
+                    boolean versionIssue = msg.contains("升级") || msg.contains("版本");
+                    if (code == 0 || !versionIssue) {
+                        setClientVersion(v);
+                        cb.onResult(v, null);
+                        return;
+                    }
+                } catch (Exception e) {
+                    // 网络异常：保留当前版本，交由上层提示
+                    cb.onResult(clientVersion, e.getMessage());
+                    return;
+                }
+            }
+            cb.onResult(null, "未找到被服务端接受的客户端版本");
+        }).start();
     }
 
     // ====== 签名 ======
@@ -81,7 +145,7 @@ public class IlifeApi {
                         + "&r=" + System.currentTimeMillis();
                 c = (HttpURLConnection) new URL(u).openConnection();
                 c.setRequestMethod("GET");
-                c.setRequestProperty("User-Agent", UA);
+                c.setRequestProperty("User-Agent", ua());
                 c.setConnectTimeout(15000);
                 c.setReadTimeout(15000);
                 InputStream is = c.getInputStream();
@@ -755,17 +819,23 @@ public class IlifeApi {
     /** 同 httpRaw，但可指定 ApplicationType。 */
     private static String httpRawApp(String method, String urlStr, String body,
                                      String token, String appType) throws Exception {
+        return httpRawApp(method, urlStr, body, token, appType, clientVersion);
+    }
+
+    /** 同 httpRawApp，但显式指定 VersionCode，用于版本探测。 */
+    private static String httpRawApp(String method, String urlStr, String body,
+                                     String token, String appType, String version) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(urlStr).openConnection();
         try {
             c.setRequestMethod(method);
             c.setConnectTimeout(15000);
             c.setReadTimeout(15000);
-            c.setRequestProperty("User-Agent", UA);
+            c.setRequestProperty("User-Agent", "Android_ilife798_" + version);
             c.setRequestProperty("Content-Type", "application/json");
             c.setRequestProperty("ApplicationType", appType);
             c.setRequestProperty("Accept-Language", "zh-Hans-CN;q=1");
             // 与官方客户端一致：所有接口都需要携带版本号，否则会被判为旧版
-            c.setRequestProperty("VersionCode", CLIENT_VERSION);
+            c.setRequestProperty("VersionCode", version);
             if (token != null && !token.isEmpty()) {
                 c.setRequestProperty("Authorization", token);
             }

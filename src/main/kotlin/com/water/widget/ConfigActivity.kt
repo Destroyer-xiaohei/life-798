@@ -42,6 +42,7 @@ class ConfigActivity : ComponentActivity() {
     private var scoreGeneration = 0
     private var destroyed = false
     private var notificationRequestInFlight = false
+    private var clientVersionProbed = false
     private val requestNotifications = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -116,6 +117,7 @@ class ConfigActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        ensureClientVersion()
         viewModel.reloadAccounts(resetScore = true)
         refreshCurrentScore()
         updateWidgets()
@@ -181,6 +183,27 @@ class ConfigActivity : ComponentActivity() {
                     }
                     wasRunning = state.running
                 }
+            }
+        }
+    }
+
+    /**
+     * 平台会随官方 App 更新抬高最低版本下限，低于下限时积分接口返回“请升级最新版app”。
+     * 进入前台时静默探测一个被服务端接受的版本号并持久化，供后续所有请求使用。
+     */
+    private fun ensureClientVersion() {
+        if (clientVersionProbed) return
+        val account = AccountStore.getCurrent(this) ?: return
+        val token = account.token?.takeIf { it.isNotBlank() }
+            ?: account.appToken?.takeIf { it.isNotBlank() }
+            ?: return
+        clientVersionProbed = true
+        IlifeApi.ensureClientVersion(token) { version, _ ->
+            if (version != null && version.isNotBlank()) {
+                getSharedPreferences(WaterApi.PREFS, MODE_PRIVATE)
+                    .edit()
+                    .putString(WaterWidgetApp.KEY_CLIENT_VERSION, version)
+                    .apply()
             }
         }
     }
