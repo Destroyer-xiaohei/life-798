@@ -27,7 +27,10 @@ public class IlifeApi {
     static final String GATEWAY = BuildConfig.API_GATEWAY;
     static final String CID = BuildConfig.API_CID;
     private static final String SIGN_SALT = BuildConfig.SIGN_SALT;
-    private static final String UA = "WaterWidget/" + BuildConfig.VERSION_NAME + " (Android)";
+    // 服务端按客户端版本号做最低版本校验，过低会返回“请升级最新版app”；
+    // 这里与官方客户端（慧生活798）保持一致。
+    private static final String CLIENT_VERSION = "3.1.9";
+    private static final String UA = "Android_ilife798_" + CLIENT_VERSION;
     private static final String DEVICE_LOGIN_REJECTED_MESSAGE =
             "设备登录信息未被接受，请检查是否填反或重新完成设备登录";
 
@@ -761,8 +764,8 @@ public class IlifeApi {
             c.setRequestProperty("Content-Type", "application/json");
             c.setRequestProperty("ApplicationType", appType);
             c.setRequestProperty("Accept-Language", "zh-Hans-CN;q=1");
-            // 与官方客户端一致：设备控制接口要求携带版本号
-            c.setRequestProperty("VersionCode", BuildConfig.VERSION_NAME);
+            // 与官方客户端一致：所有接口都需要携带版本号，否则会被判为旧版
+            c.setRequestProperty("VersionCode", CLIENT_VERSION);
             if (token != null && !token.isEmpty()) {
                 c.setRequestProperty("Authorization", token);
             }

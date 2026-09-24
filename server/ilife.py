@@ -48,7 +48,10 @@ import urllib.request
 # 默认对接慧生活798；同一套契约的白标平台可通过环境变量换成自己的网关与盐值。
 BASE_URL = (os.environ.get("ILIFE_BASE_URL") or "https://i.ilife798.com").rstrip("/")
 SIGN_SALT = os.environ.get("ILIFE_SIGN_SALT") or "aslkdvcniu34h9tgufh278wv2"
-APP_VERSION = os.environ.get("ILIFE_APP_VERSION") or "3.1.4"
+# 服务端按客户端版本号做最低版本校验，过低会被平台拒绝并提示“请升级最新版app”，
+# 因此这里与官方客户端（慧生活798 3.1.9）保持一致；如需跟随平台抬高的下限，改这里或设置
+# 环境变量 ILIFE_APP_VERSION。
+APP_VERSION = os.environ.get("ILIFE_APP_VERSION") or "3.1.9"
 
 CN_TZ = timezone(timedelta(hours=8))
 
