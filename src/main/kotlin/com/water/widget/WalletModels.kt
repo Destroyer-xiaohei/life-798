@@ -218,3 +218,171 @@ object ScoreExchangeParser {
             ?: throw IllegalArgumentException("接口响应缺少 data")
     }
 }
+
+data class WalletAccount(
+    val id: String = "",
+    val eid: String = "",
+    val ownerId: String = "",
+    val name: String = "",
+    val olCash: Double = 0.0,
+    val olGift: Double = 0.0,
+    val ofCash: Double = 0.0,
+    val ofGift: Double = 0.0,
+    val total: Double = 0.0,
+    val auth: Boolean = false,
+    val chargeEnabled: Boolean = true,
+    val refundEnabled: Boolean = true
+) {
+    val refundable: Double get() = if (auth) olCash + ofCash else olCash
+}
+
+data class RefundProgress(
+    val ctime: Long = -1L,
+    val count: Int = 0,
+    val total: Double = 0.0,
+    val fail: Int? = null
+) {
+    val active: Boolean get() = ctime != -1L
+}
+
+data class BillRecord(
+    val id: String = "",
+    val cata: Int = 0,
+    val type: Int = 0,
+    val msg: String = "",
+    val status: Int = 0,
+    val dir: Int = 1,
+    val payment: Double = 0.0,
+    val time: Long = 0L
+)
+
+data class BillDetailInfo(
+    val id: String = "",
+    val cata: Int = 0,
+    val type: Int = 0,
+    val msg: String = "",
+    val status: Int = 0,
+    val dir: Int = 1,
+    val payment: Double = 0.0,
+    val discount: Double = 0.0,
+    val ctime: Long = 0L,
+    val utime: Long = 0L,
+    val enterpriseName: String = "",
+    val deviceId: String = "",
+    val deviceName: String = "",
+    val deviceDtype: Int = 0,
+    val couponCount: Int = 0,
+    val promoName: String = ""
+)
+
+/** 钱包、账单、退款响应解析（对应 ilife798 的 WalletBillController）。 */
+object BillResponseParser {
+    data class WalletOwnerResult(
+        val wallets: List<WalletAccount> = emptyList(),
+        val activeWalletId: String = "",
+        val refundProgress: RefundProgress? = null
+    )
+
+    data class BillListResult(
+        val records: List<BillRecord> = emptyList(),
+        val total: Int = 0
+    )
+
+    fun parseWalletOwner(response: JSONObject): WalletOwnerResult {
+        if (response.optInt("code", -1) != 0) return WalletOwnerResult()
+        val data = response.optJSONObject("data") ?: return WalletOwnerResult()
+        val active = data.optJSONObject("aw")?.let(::parseWalletAccount)
+        val endpoints = data.optJSONArray("eps")?.let { arr ->
+            (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.let(::parseWalletAccount) }
+        } ?: emptyList()
+        val wallets = buildList {
+            if (active != null) add(active)
+            addAll(endpoints)
+        }.distinctBy { it.id.ifEmpty { it.eid } }
+        val activeId = active?.id?.takeIf { it.isNotEmpty() } ?: wallets.firstOrNull()?.id.orEmpty()
+        val progress = data.optJSONObject("rfdProg")?.let {
+            RefundProgress(
+                ctime = it.optLong("ctime", -1L),
+                count = it.optInt("count", 0),
+                total = it.optDouble("total", 0.0),
+                fail = if (it.has("fail")) it.optInt("fail") else null
+            )
+        }
+        return WalletOwnerResult(wallets, activeId, progress)
+    }
+
+    fun parseBillList(response: JSONObject): BillListResult {
+        if (response.optInt("code", -1) != 0) return BillListResult()
+        val data = response.optJSONArray("data") ?: return BillListResult()
+        val total = response.optInt("size", data.length())
+        val records = (0 until data.length()).mapNotNull { index ->
+            val obj = data.optJSONObject(index) ?: return@mapNotNull null
+            BillRecord(
+                id = obj.optString("id", ""),
+                cata = obj.optInt("cata", 0),
+                type = obj.optInt("type", 0),
+                msg = obj.optString("msg", ""),
+                status = obj.optInt("status", 0),
+                dir = obj.optInt("dir", 1),
+                payment = obj.optDouble("payment", 0.0),
+                time = if (obj.has("utime")) obj.optLong("utime", 0L) else obj.optLong("ctime", 0L)
+            )
+        }
+        return BillListResult(records, total)
+    }
+
+    fun parseBillDetail(response: JSONObject, billId: String): BillDetailInfo? {
+        if (response.optInt("code", -1) != 0) return null
+        val data = response.optJSONObject("data") ?: return null
+        val bill = data.optJSONObject("bill") ?: return null
+        val ep = bill.optJSONObject("ep")
+        val dev = bill.optJSONObject("dev")
+        return BillDetailInfo(
+            id = bill.optString("id", billId),
+            cata = bill.optInt("cata", 0),
+            type = bill.optInt("type", 0),
+            msg = bill.optString("msg", ""),
+            status = bill.optInt("status", 0),
+            dir = bill.optInt("dir", 1),
+            payment = bill.optDouble("payment", 0.0),
+            discount = bill.optDouble("discount", 0.0),
+            ctime = bill.optLong("ctime", 0L),
+            utime = bill.optLong("utime", 0L),
+            enterpriseName = ep?.optString("name", "").orEmpty(),
+            deviceId = dev?.optString("id", "").orEmpty(),
+            deviceName = dev?.optString("name", "").orEmpty(),
+            deviceDtype = dev?.optJSONObject("bm")?.optInt("dtype", 0) ?: 0,
+            couponCount = data.optString("cnt", "").toIntOrNull() ?: 0,
+            promoName = bill.optJSONObject("promo")?.optString("name", "").orEmpty()
+        )
+    }
+
+    /** 退款结果：成功返回 null，失败返回错误提示。 */
+    fun refundError(response: JSONObject): String? {
+        val code = response.optInt("code", -1)
+        if (code == 0) return null
+        val msg = response.optString("msg", "")
+        return if (msg.isBlank()) "退款失败（code=$code）" else msg
+    }
+
+    private fun parseWalletAccount(wallet: JSONObject): WalletAccount {
+        val ep = wallet.optJSONObject("ep")
+        val owner = wallet.optJSONObject("owner")
+        val setting = ep?.optJSONObject("setting")
+        return WalletAccount(
+            id = wallet.optString("id", ""),
+            eid = ep?.optString("id", "").orEmpty(),
+            ownerId = owner?.optString("id", "").orEmpty(),
+            name = ep?.optString("name", "").takeIf { !it.isNullOrEmpty() }
+                ?: wallet.optString("name", ""),
+            olCash = wallet.optDouble("olCash", 0.0),
+            olGift = wallet.optDouble("olGift", 0.0),
+            ofCash = wallet.optDouble("ofCash", 0.0),
+            ofGift = wallet.optDouble("ofGift", 0.0),
+            total = wallet.optDouble("total", 0.0),
+            auth = wallet.optBoolean("auth", false),
+            chargeEnabled = (setting?.optInt("olcharge", 1) ?: 1) == 1,
+            refundEnabled = (setting?.optInt("olrefund", 1) ?: 1) == 1
+        )
+    }
+}

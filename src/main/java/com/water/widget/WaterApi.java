@@ -2,12 +2,24 @@ package com.water.widget;
 
 import android.content.Context;
 
+import org.json.JSONObject;
+
 /**
- * 出水逻辑（向后兼容入口）。
- * 实际请求委托给 IlifeApi，token/did 从 AccountStore 当前账户读取。
+ * 设备启停逻辑（对齐 ilife798 的实现）。
+ *
+ * 启动：先查询设备真实状态，已在出水则直接返回；否则优先用商家钱包（ptype=91）启动，
+ * 失败后自动切换支付宝免密（ptype=21）兜底。
+ * 停止：直接调用 dev/end。
  */
 public class WaterApi {
     public static final String PREFS = "water_cfg";
+
+    /** 启动结果，供界面 / 小部件 / 磁贴区分处理。 */
+    public enum StartResult {
+        STARTED,
+        ALREADY_RUNNING,
+        FAILED
+    }
 
     public interface Callback {
         void onResult(String status);
@@ -20,18 +32,9 @@ public class WaterApi {
 
     /** 启动指定饮水设备。水温由设备上的实体按钮决定。 */
     public static void start(Context ctx, final String did, final Callback cb) {
-        IlifeApi.devStart(ctx, did, new IlifeApi.TextCallback() {
-            @Override
-            public void onResult(String text, String err) {
-                if (text != null) {
-                    cb.onResult("设备 " + text);
-                } else if ("TOKEN_EXPIRED".equals(err)) {
-                    cb.onResult("启动失败：登录已过期，请重新登录");
-                } else {
-                    cb.onResult("启动失败：" + err);
-                }
-            }
-        });
+        Account account = AccountStore.getCurrent(ctx);
+        String token = account == null ? "" : (account.hasAppToken() ? account.appToken : account.token);
+        startWithToken(token, did, cb);
     }
 
     /** 使用调用时冻结的设备控制登录信息启动设备。 */
@@ -40,34 +43,70 @@ public class WaterApi {
             final String did,
             final Callback cb
     ) {
-        IlifeApi.devStartWithToken(appToken, did, new IlifeApi.TextCallback() {
+        if (appToken == null || appToken.isEmpty()) {
+            cb.onResult("启动失败：需要设备控制登录信息，请先在账户中添加");
+            return;
+        }
+        // 先确认状态，避免设备已出水时重复下发启动。
+        // 状态接口失败时不阻断启动（与 ilife798 一致，保证设备可用），仅登录失效才中止。
+        IlifeApi.devStatusWithToken(appToken, did, new IlifeApi.JsonCallback() {
+            @Override
+            public void onResult(JSONObject json, String err) {
+                if (json != null) {
+                    int code = json.optInt("code", -999);
+                    if (code == -99) {
+                        cb.onResult("启动失败：登录已过期，请重新登录");
+                        return;
+                    }
+                    if (code == 0 && IlifeApi.isDispensing(json)) {
+                        cb.onResult("设备已在出水");
+                        return;
+                    }
+                }
+                startWithPayFallback(appToken, did, cb);
+            }
+        });
+    }
+
+    /** 优先商家钱包（91），失败后自动切换支付宝免密（21）。 */
+    private static void startWithPayFallback(
+            final String appToken,
+            final String did,
+            final Callback cb
+    ) {
+        IlifeApi.devStartWithToken(appToken, did, 91, "", new IlifeApi.TextCallback() {
             @Override
             public void onResult(String text, String err) {
                 if (text != null) {
                     cb.onResult("设备 " + text);
-                } else if ("TOKEN_EXPIRED".equals(err)) {
-                    cb.onResult("启动失败：登录已过期，请重新登录");
-                } else {
-                    cb.onResult("启动失败：" + err);
+                    return;
                 }
+                if ("TOKEN_EXPIRED".equals(err)) {
+                    cb.onResult("启动失败：登录已过期，请重新登录");
+                    return;
+                }
+                IlifeApi.devStartWithToken(appToken, did, 21, "", new IlifeApi.TextCallback() {
+                    @Override
+                    public void onResult(String text2, String err2) {
+                        if (text2 != null) {
+                            cb.onResult("设备 " + text2);
+                        } else if ("TOKEN_EXPIRED".equals(err2)) {
+                            cb.onResult("启动失败：登录已过期，请重新登录");
+                        } else {
+                            String reason = err2 != null && !err2.isEmpty() ? err2 : err;
+                            cb.onResult("启动失败：" + (reason == null ? "未知错误" : reason));
+                        }
+                    }
+                });
             }
         });
     }
 
     /** 停止指定饮水设备出水。 */
     public static void stop(Context ctx, final String did, final Callback cb) {
-        IlifeApi.devEnd(ctx, did, new IlifeApi.TextCallback() {
-            @Override
-            public void onResult(String text, String err) {
-                if (text != null) {
-                    cb.onResult("设备 " + text);
-                } else if ("TOKEN_EXPIRED".equals(err)) {
-                    cb.onResult("停止失败：登录已过期，请重新登录");
-                } else {
-                    cb.onResult("停止失败：" + err);
-                }
-            }
-        });
+        Account account = AccountStore.getCurrent(ctx);
+        String token = account == null ? "" : (account.hasAppToken() ? account.appToken : account.token);
+        stopWithToken(token, did, cb);
     }
 
     /** 使用调用时冻结的设备控制登录信息停止设备。 */
@@ -85,6 +124,33 @@ public class WaterApi {
                     cb.onResult("停止失败：登录已过期，请重新登录");
                 } else {
                     cb.onResult("停止失败：" + err);
+                }
+            }
+        });
+    }
+
+    /** 先查状态，再决定启动还是停止（对齐 ilife798 的合并按钮行为）。 */
+    public static void toggleWithToken(
+            final String appToken,
+            final String did,
+            final Callback cb
+    ) {
+        statusWithToken(appToken, did, new StatusCallback() {
+            @Override
+            public void onResult(Boolean running, String err) {
+                if ("TOKEN_EXPIRED".equals(err)) {
+                    cb.onResult("登录已过期，请重新登录");
+                    return;
+                }
+                if (running == null) {
+                    // 状态未知时按空闲处理，交给 startWithToken 内部再次确认。
+                    startWithToken(appToken, did, cb);
+                    return;
+                }
+                if (running) {
+                    stopWithToken(appToken, did, cb);
+                } else {
+                    startWithToken(appToken, did, cb);
                 }
             }
         });

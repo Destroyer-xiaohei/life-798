@@ -73,13 +73,16 @@ public class WaterWidgetProvider extends AppWidgetProvider {
                 render(context, widgetId, "登录已过期，请在 App 重新登录");
                 return;
             }
-            Boolean effective = running;
-            if (effective == null) {
-                // 状态接口异常：退回本机监测状态，保证按钮仍可用。
-                effective = WaterService.isMonitoring();
+            if (running == null) {
+                // 状态接口异常：用合并逻辑再确认一次，保证按钮仍可用。
+                WaterApi.toggleWithToken(appToken, did, status -> mainHandler.post(() -> {
+                    render(context, widgetId, status);
+                    refreshRunningState(context, new int[]{widgetId});
+                }));
+                return;
             }
-            cacheRunning(context, did, effective);
-            actOnDevice(context, widgetId, did, appToken, effective);
+            cacheRunning(context, did, running);
+            actOnDevice(context, widgetId, did, appToken, running);
         }));
     }
 
@@ -89,29 +92,19 @@ public class WaterWidgetProvider extends AppWidgetProvider {
         if (running) {
             WaterApi.stopWithToken(appToken, did, status -> mainHandler.post(() -> {
                 cacheRunning(context, did, false);
-                if (status != null && status.contains("已停止")) {
-                    // 主动停止后结束接水监测，撤掉"正在接水"的进行中通知。
-                    WaterService.stopMonitoring(did, "已停止出水", "设备已停止，接水监测结束");
-                }
                 render(context, widgetId, status);
                 refreshRunningState(context, new int[]{widgetId});
             }));
             return;
         }
 
-        WaterService.StartResult result = WaterService.start(context, did, widgetId);
-        String status;
-        if (result == WaterService.StartResult.STARTED) {
-            status = "设备启动中…";
-            cacheRunning(context, did, true);
-        } else if (result == WaterService.StartResult.ALREADY_RUNNING) {
-            status = "已有接水会话正在监测";
-            cacheRunning(context, did, true);
-        } else {
-            status = "启动失败，请稍后重试";
-        }
-        render(context, widgetId, status);
-        refreshRunningState(context, new int[]{widgetId});
+        WaterApi.startWithToken(appToken, did, status -> mainHandler.post(() -> {
+            if (status != null && status.contains("成功")) {
+                cacheRunning(context, did, true);
+            }
+            render(context, widgetId, status);
+            refreshRunningState(context, new int[]{widgetId});
+        }));
     }
 
     /** 后台查询当前设备是否出水，刷新小部件上的按钮文案。 */

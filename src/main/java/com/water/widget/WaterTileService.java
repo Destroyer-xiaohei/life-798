@@ -1,7 +1,6 @@
 package com.water.widget;
 
 import android.annotation.SuppressLint;
-import android.appwidget.AppWidgetManager;
 import android.app.PendingIntent;
 import android.content.Intent;
 import android.os.Build;
@@ -46,49 +45,32 @@ public class WaterTileService extends TileService {
         // 以服务端返回的设备状态为准，而不是本进程的监测标记，
         // 这样 App 被杀掉之后磁贴仍然能正确显示启动 / 停止。
         WaterApi.statusWithToken(appToken, did, (running, err) -> mainHandler.post(() -> {
-            Boolean effective = running;
-            if (effective == null) {
-                effective = WaterService.isMonitoring();
+            if (running == null) {
+                WaterApi.toggleWithToken(appToken, did, status -> mainHandler.post(() -> {
+                    showToast(status);
+                    refreshTileFromStatus();
+                }));
+                return;
             }
-            if (effective) {
+            if (running) {
                 stopDevice(appToken, did);
             } else {
-                startDevice(did);
+                startDevice(appToken, did);
             }
         }));
     }
 
-    private void startDevice(String did) {
-        WaterService.StartResult result = WaterService.start(
-                this,
-                did,
-                AppWidgetManager.INVALID_APPWIDGET_ID
-        );
-        if (result == WaterService.StartResult.ALREADY_RUNNING) {
-            showToast("已有接水会话正在监测");
-            updateTile(Tile.STATE_ACTIVE, LABEL_STOP);
-            return;
-        }
-        if (result == WaterService.StartResult.FAILED) {
-            showToast("设备启动失败，请稍后重试");
-            refreshTileFromStatus();
-            return;
-        }
-
-        updateTile(Tile.STATE_ACTIVE, LABEL_STOP);
-        showToast("设备启动中…");
-        mainHandler.postDelayed(() -> {
-            refreshTileFromStatus();
-        }, 2000L);
+    private void startDevice(String appToken, String did) {
+        updateTile(Tile.STATE_ACTIVE, "启动中…");
+        WaterApi.startWithToken(appToken, did, status -> mainHandler.post(() -> {
+            showToast(status);
+            mainHandler.postDelayed(this::refreshTileFromStatus, 2000L);
+        }));
     }
 
     private void stopDevice(String appToken, String did) {
         updateTile(Tile.STATE_ACTIVE, "停止中…");
         WaterApi.stopWithToken(appToken, did, status -> mainHandler.post(() -> {
-            if (status != null && status.contains("已停止")) {
-                // 主动停止后结束接水监测，撤掉"正在接水"的进行中通知。
-                WaterService.stopMonitoring(did, "已停止出水", "设备已停止，接水监测结束");
-            }
             showToast(status);
             refreshTileFromStatus();
         }));
@@ -109,11 +91,7 @@ public class WaterTileService extends TileService {
             return;
         }
         WaterApi.statusWithToken(appToken, did, (running, err) -> mainHandler.post(() -> {
-            Boolean effective = running;
-            if (effective == null) {
-                effective = WaterService.isMonitoring();
-            }
-            if (effective) {
+            if (running != null && running) {
                 updateTile(Tile.STATE_ACTIVE, LABEL_STOP);
             } else {
                 updateTile(Tile.STATE_INACTIVE, LABEL_START);

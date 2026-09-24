@@ -68,6 +68,11 @@
             android:label="钱包充值" />
 
         <activity
+            android:name=".BillActivity"
+            android:exported="false"
+            android:label="我的账单" />
+
+        <activity
             android:name=".ServerClaimActivity"
             android:exported="false"
             android:label="自动领取" />
@@ -85,11 +90,6 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_info" />
         </receiver>
-
-        <service
-            android:name=".WaterService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
 
         <service
             android:name=".TaskForegroundService"

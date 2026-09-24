@@ -78,6 +78,7 @@ class ConfigActivity : ComponentActivity() {
                     onRunTasks = { runWithNotificationPermission(::runTasksInHome) },
                     onScores = { startActivity(Intent(this, ScoreActivity::class.java)) },
                     onWallet = { startActivity(Intent(this, WalletActivity::class.java)) },
+                    onBills = { startActivity(Intent(this, BillActivity::class.java)) },
                     onSelectAccount = { phone -> switchAccount(phone) },
                     onFetchDevices = { fetchDevices(showFeedback = true, showProgress = true) },
                     onRefreshHome = ::refreshHome,
@@ -376,28 +377,18 @@ class ConfigActivity : ComponentActivity() {
             return false
         }
 
-        val started = when (
-            WaterService.start(this, deviceId, AppWidgetManager.INVALID_APPWIDGET_ID)
-        ) {
-            WaterService.StartResult.STARTED -> {
-                toast("设备启动中…")
-                true
+        val appToken = account.appToken
+        toast("设备启动中…")
+        WaterApi.startWithToken(appToken, deviceId, WaterApi.Callback { status ->
+            runOnUiThread {
+                if (destroyed) return@runOnUiThread
+                toast(status)
+                // 设备真正进入出水状态需要一点时间，稍后各查一次刷新按钮文案。
+                ui.postDelayed({ refreshDeviceStatus(listOf(deviceId)) }, 1_500L)
+                ui.postDelayed({ refreshDeviceStatus(listOf(deviceId)) }, 5_000L)
             }
-            WaterService.StartResult.ALREADY_RUNNING -> {
-                toast("已有接水会话正在监测，请勿重复启动")
-                true
-            }
-            WaterService.StartResult.FAILED -> {
-                toast("设备启动失败，请稍后重试")
-                false
-            }
-        }
-        if (started) {
-            // 设备真正进入出水状态需要一点时间，稍后各查一次刷新按钮文案。
-            ui.postDelayed({ refreshDeviceStatus(listOf(deviceId)) }, 1_500L)
-            ui.postDelayed({ refreshDeviceStatus(listOf(deviceId)) }, 5_000L)
-        }
-        return started
+        })
+        return true
     }
 
     /**
@@ -464,10 +455,6 @@ class ConfigActivity : ComponentActivity() {
             runOnUiThread {
                 if (destroyed) return@runOnUiThread
                 toast(status)
-                // 主动停止后立刻结束接水监测，避免通知栏一直显示"正在接水"。
-                if (status.contains("已停止")) {
-                    WaterService.stopMonitoring(deviceId, "已停止出水", "设备已停止，接水监测结束")
-                }
                 updateWidgets()
                 ui.postDelayed({ refreshDeviceStatus(listOf(deviceId)) }, 1_500L)
             }

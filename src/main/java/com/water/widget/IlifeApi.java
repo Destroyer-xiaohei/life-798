@@ -237,9 +237,41 @@ public class IlifeApi {
         }).start();
     }
 
+    /**
+     * 用设备控制登录信息分页获取账单记录。
+     * status：1 未付款 / 3 已付款 / 2 待确认 / 4 付款失败 / 9 已取消。
+     */
+    public static void billListWithToken(final String appToken, final int page, final int size,
+                                         final int status, final JsonCallback cb) {
+        String path = "/bill/lst-owner?page=" + page
+                + "&size=" + size
+                + "&hasCount=" + (page == 0)
+                + "&status=" + status;
+        requestApp("GET", path, null, appToken, cb);
+    }
+
+    /** 获取账单详情（bill/view-full：data.bill + data.cnt）。 */
+    public static void billDetailWithToken(final String appToken, final String billId,
+                                           final JsonCallback cb) {
+        requestApp("GET", "/bill/view-full?id=" + enc(billId), null, appToken, cb);
+    }
+
+    /** 钱包退款：POST /acc/wallet/refund，type=23（支付宝小程序，与官方一致）。 */
+    public static void refundWalletWithToken(final String appToken, final String eid,
+                                             final JsonCallback cb) {
+        JSONObject body = new JSONObject();
+        try {
+            body.put("eid", eid);
+            body.put("type", 23);
+        } catch (JSONException e) {
+            throw new IllegalStateException("无法创建退款请求", e);
+        }
+        requestApp("POST", "/acc/wallet/refund", body, appToken, cb);
+    }
+
     /** 使用设备控制登录信息获取账户钱包。 */
     public static void walletOwnerWithToken(final String appToken, final JsonCallback cb) {
-        requestApp("GET", "/acc/wallet/owner", null, appToken, cb);
+        requestApp("GET", "/acc/wallet/owner?all=true", null, appToken, cb);
     }
 
     /** 使用设备登录信息读取可用积分。 */
@@ -472,13 +504,28 @@ public class IlifeApi {
             final String did,
             final TextCallback cb
     ) {
+        devStartWithToken(appToken, did, 91, "", cb);
+    }
+
+    /**
+     * 使用指定支付方式启动设备。
+     * ptype：91 = 商家钱包，21 = 支付宝免密；args 为设备启动参数（可为空）。
+     */
+    public static void devStartWithToken(
+            final String appToken,
+            final String did,
+            final int ptype,
+            final String args,
+            final TextCallback cb
+    ) {
         new Thread(() -> {
             if (appToken == null || appToken.isEmpty()) {
                 cb.onResult(null, "需要设备控制登录信息，请先在账户中添加");
                 return;
             }
             String url = GATEWAY + "/dev/start?did=" + enc(did)
-                    + "&upgrade=true&ptype=91&rcp=false";
+                    + "&upgrade=true&ptype=" + ptype + "&rcp=false&cnt=1"
+                    + "&args=" + enc(args == null ? "" : args);
             try {
                 String body = httpRawApp("GET", url, null, appToken, "1,1");
                 JSONObject json = new JSONObject(body);
@@ -714,6 +761,8 @@ public class IlifeApi {
             c.setRequestProperty("Content-Type", "application/json");
             c.setRequestProperty("ApplicationType", appType);
             c.setRequestProperty("Accept-Language", "zh-Hans-CN;q=1");
+            // 与官方客户端一致：设备控制接口要求携带版本号
+            c.setRequestProperty("VersionCode", BuildConfig.VERSION_NAME);
             if (token != null && !token.isEmpty()) {
                 c.setRequestProperty("Authorization", token);
             }

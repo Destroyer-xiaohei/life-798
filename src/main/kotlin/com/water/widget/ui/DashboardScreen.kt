@@ -45,6 +45,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Check
@@ -64,6 +65,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -128,6 +130,7 @@ fun DashboardScreen(
     onRunTasks: () -> Unit,
     onScores: () -> Unit,
     onWallet: () -> Unit,
+    onBills: () -> Unit,
     onSelectAccount: (String) -> Unit,
     onFetchDevices: () -> Unit,
     onRefreshHome: () -> Unit,
@@ -244,6 +247,7 @@ fun DashboardScreen(
                             onAccounts = onAccounts,
                             onScores = onScores,
                             onWallet = onWallet,
+                            onBills = onBills,
                             onClaimServer = onClaimServer,
                             themeMode = themeMode,
                             onOpenAppearanceSettings = { showAppearanceSettings = true },
@@ -727,6 +731,7 @@ private fun MineTab(
     onAccounts: () -> Unit,
     onScores: () -> Unit,
     onWallet: () -> Unit,
+    onBills: () -> Unit,
     onClaimServer: () -> Unit,
     themeMode: AppThemeMode,
     onOpenAppearanceSettings: () -> Unit,
@@ -744,35 +749,67 @@ private fun MineTab(
         }
         OutlinedButton(onClick = onScores, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("查看积分与流水") }
     }
-    SettingsRow(
-        icon = Icons.Default.AccountBalanceWallet,
-        title = "钱包与充值",
-        subtitle = if (state.hasAppToken) "查看余额并充值" else "需要设备登录",
-        onClick = onWallet
-    )
-    SettingsRow(
-        icon = Icons.Default.CheckCircle,
-        title = "自动领取",
-        subtitle = if (state.hasAccount) "服务端每天定时领完全部积分" else "需要登录账号",
-        onClick = onClaimServer
-    )
-    SettingsRow(
-        icon = Icons.Default.DarkMode,
-        title = "外观设置",
-        subtitle = themeMode.label,
-        onClick = onOpenAppearanceSettings
-    )
-    SettingsRow(
-        icon = Icons.Default.Favorite,
-        title = "支持开发者",
-        subtitle = "喜欢这个应用？欢迎请我喝杯水",
-        onClick = onOpenSupport
-    )
+    SettingsGroup {
+        SettingsRow(
+            icon = Icons.AutoMirrored.Filled.ReceiptLong,
+            title = "我的账单",
+            subtitle = if (state.hasAppToken) "查看账单、充值、退款与详情" else "需要设备登录",
+            onClick = onBills
+        )
+        SettingsDivider()
+        SettingsRow(
+            icon = Icons.Default.AccountBalanceWallet,
+            title = "钱包与充值",
+            subtitle = if (state.hasAppToken) "查看余额并充值" else "需要设备登录",
+            onClick = onWallet
+        )
+        SettingsDivider()
+        SettingsRow(
+            icon = Icons.Default.CheckCircle,
+            title = "自动领取",
+            subtitle = if (state.hasAccount) "服务端每天定时领完全部积分" else "需要登录账号",
+            onClick = onClaimServer
+        )
+        SettingsDivider()
+        SettingsRow(
+            icon = Icons.Default.DarkMode,
+            title = "外观设置",
+            subtitle = themeMode.label,
+            onClick = onOpenAppearanceSettings
+        )
+        SettingsDivider()
+        SettingsRow(
+            icon = Icons.Default.Favorite,
+            title = "支持开发者",
+            subtitle = "喜欢这个应用？欢迎请我喝杯水",
+            onClick = onOpenSupport
+        )
+    }
     Text(
         text = "WaterWidget  v${BuildConfig.VERSION_NAME}",
         modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         fontSize = 12.sp
+    )
+}
+
+@Composable
+private fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
+    Card(
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(content = content)
+    }
+}
+
+@Composable
+private fun SettingsDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(start = 69.dp),
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
     )
 }
 
@@ -800,8 +837,8 @@ private fun UsageSummaryItem(label: String, cost: String, water: String, modifie
 
 @Composable
 private fun SettingsRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
-    Surface(onClick = onClick, shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp, modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+    Surface(onClick = onClick, shape = RectangleShape, color = Color.Transparent, modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(40.dp).clip(RoundedCornerShape(13.dp)).background(MaterialTheme.colorScheme.secondaryContainer), contentAlignment = Alignment.Center) {
                 Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
             }
@@ -1123,6 +1160,7 @@ private fun DashboardPreview() {
             onRunTasks = {},
             onScores = {},
             onWallet = {},
+            onBills = {},
             onSelectAccount = {},
             onFetchDevices = {},
             onRefreshHome = {},
