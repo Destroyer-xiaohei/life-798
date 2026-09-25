@@ -13,6 +13,8 @@ import android.content.pm.PackageManager;
  */
 public class WaterWidgetApp extends Application {
     public static final String KEY_CLIENT_VERSION = "client_version";
+    public static final String KEY_SCORE_APP_TYPE = "score_app_type";
+    public static final String KEY_SCORE_USE_APP = "score_use_app";
 
     // 官方「慧生活798」客户端包名（白标）
     private static final String[] OFFICIAL_PACKAGES = {
@@ -31,10 +33,20 @@ public class WaterWidgetApp extends Application {
                     .apply();
             return;
         }
-        String saved = getSharedPreferences(WaterApi.PREFS, MODE_PRIVATE)
-                .getString(KEY_CLIENT_VERSION, "");
+        android.content.SharedPreferences prefs =
+                getSharedPreferences(WaterApi.PREFS, MODE_PRIVATE);
+        String saved = prefs.getString(KEY_CLIENT_VERSION, "");
         if (saved != null && !saved.trim().isEmpty()) {
             IlifeApi.setClientVersion(saved);
+        }
+        String appType = prefs.getString(KEY_SCORE_APP_TYPE, "");
+        boolean useApp = prefs.getBoolean(KEY_SCORE_USE_APP, false);
+        if (appType != null && !appType.trim().isEmpty()) {
+            IlifeApi.applyScoreChannel(appType.trim(), useApp);
+        }
+        Account current = AccountStore.getCurrent(this);
+        if (current != null) {
+            IlifeApi.setScoreTokens(current.token, current.appToken);
         }
     }
 

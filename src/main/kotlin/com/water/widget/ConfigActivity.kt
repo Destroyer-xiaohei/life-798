@@ -117,7 +117,7 @@ class ConfigActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        ensureClientVersion()
+        ensureScoreChannel()
         viewModel.reloadAccounts(resetScore = true)
         refreshCurrentScore()
         updateWidgets()
@@ -188,22 +188,26 @@ class ConfigActivity : ComponentActivity() {
     }
 
     /**
-     * 平台会随官方 App 更新抬高最低版本下限，低于下限时积分接口返回“请升级最新版app”。
-     * 进入前台时静默探测一个被服务端接受的版本号并持久化，供后续所有请求使用。
+     * 积分接口可能要求特定的 token + ApplicationType + 版本组合：官方 App 用「设备登录 token + 1,1」。
+     * 进入前台时静默探测一组可用组合并持久化，供后续所有积分请求使用。
      */
-    private fun ensureClientVersion() {
+    private fun ensureScoreChannel() {
         if (clientVersionProbed) return
         val account = AccountStore.getCurrent(this) ?: return
-        val token = account.token?.takeIf { it.isNotBlank() }
-            ?: account.appToken?.takeIf { it.isNotBlank() }
-            ?: return
+        val points = account.token?.takeIf { it.isNotBlank() }.orEmpty()
+        val app = account.appToken?.takeIf { it.isNotBlank() }.orEmpty()
+        if (points.isEmpty() && app.isEmpty()) return
         clientVersionProbed = true
-        IlifeApi.ensureClientVersion(token) { version, _ ->
+        IlifeApi.detectScoreChannel(points, app) { version, err ->
             if (version != null && version.isNotBlank()) {
                 getSharedPreferences(WaterApi.PREFS, MODE_PRIVATE)
                     .edit()
                     .putString(WaterWidgetApp.KEY_CLIENT_VERSION, version)
+                    .putString(WaterWidgetApp.KEY_SCORE_APP_TYPE, IlifeApi.getScoreAppType())
+                    .putBoolean(WaterWidgetApp.KEY_SCORE_USE_APP, IlifeApi.isScoreUseAppToken())
                     .apply()
+            } else if (!destroyed) {
+                runOnUiThread { toast("积分接口探测失败：${err ?: "未知原因"}") }
             }
         }
     }

@@ -65,6 +65,94 @@ public class IlifeApi {
         void onResult(String version, String err);
     }
 
+    // ====== 积分通道 ======
+
+    // 积分接口可能要求特定的 token + ApplicationType 组合：官方 App 用「设备登录 token + 1,1」，
+    // 而旧客户端用「积分 token + 1,5」。进入前台时自动探测一组可用组合并持久化。
+    private static volatile String scorePointsToken = "";
+    private static volatile String scoreAppToken = "";
+    private static volatile boolean scoreUseAppToken = false;
+    private static volatile String scoreAppType = "1,5";
+
+    public static String getScoreAppType() {
+        return scoreAppType;
+    }
+
+    public static boolean isScoreUseAppToken() {
+        return scoreUseAppToken;
+    }
+
+    public static void setScoreTokens(String pointsToken, String appToken) {
+        scorePointsToken = pointsToken == null ? "" : pointsToken;
+        scoreAppToken = appToken == null ? "" : appToken;
+    }
+
+    public static void applyScoreChannel(String appType, boolean useAppToken) {
+        if (appType != null && !appType.isEmpty()) {
+            scoreAppType = appType;
+        }
+        scoreUseAppToken = useAppToken;
+    }
+
+    private static String effectiveScoreToken(String passed) {
+        if (scoreUseAppToken && !scoreAppToken.isEmpty()) return scoreAppToken;
+        if (!scorePointsToken.isEmpty()) return scorePointsToken;
+        return passed == null ? "" : passed;
+    }
+
+    /**
+     * 探测积分接口可用的 token / ApplicationType / 版本组合，命中后写入
+     * {@link #applyScoreChannel} 与 {@link #setClientVersion}。
+     * 组合顺序：积分token+1,5（旧行为）→ 设备token+1,1（官方行为）→ 交叉。
+     */
+    public static void detectScoreChannel(final String pointsToken, final String appToken,
+                                          final VersionCallback cb) {
+        setScoreTokens(pointsToken, appToken);
+        new Thread(() -> {
+            String[][] combos = {
+                    {pointsToken, "1,5", "0"},
+                    {appToken, "1,1", "1"},
+                    {pointsToken, "1,1", "0"},
+                    {appToken, "1,5", "1"},
+            };
+            String[] versions = {clientVersion, "3.1.7", "3.1.9", "3.1.10", "3.2.0"};
+            for (String[] combo : combos) {
+                String tk = combo[0];
+                String at = combo[1];
+                boolean useApp = "1".equals(combo[2]);
+                if (tk == null || tk.isEmpty()) continue;
+                for (String v : versions) {
+                    try {
+                        String body = httpRawApp(
+                                "GET", GATEWAY + "/acc/score/mission-lst", null, tk, at, v);
+                        JSONObject json = new JSONObject(body);
+                        int code = json.optInt("code", -999);
+                        String msg = json.optString("msg", "");
+                        if (code == 0) {
+                            applyScoreChannel(at, useApp);
+                            setClientVersion(v);
+                            cb.onResult(v, null);
+                            return;
+                        }
+                        // 登录失效：该 token 不可用，换下一组
+                        if (code == -99) continue;
+                        boolean versionIssue = msg.contains("升级") || msg.contains("版本");
+                        if (!versionIssue) {
+                            // 其它业务错误（限流等）说明通道本身可用
+                            applyScoreChannel(at, useApp);
+                            setClientVersion(v);
+                            cb.onResult(v, null);
+                            return;
+                        }
+                    } catch (Exception e) {
+                        // 网络异常，尝试下一组
+                    }
+                }
+            }
+            cb.onResult(null, "未找到可用积分通道");
+        }).start();
+    }
+
     // ====== 版本探测 ======
 
     /**
@@ -226,7 +314,8 @@ public class IlifeApi {
     public static void missionLstWithToken(final String token, final JsonCallback cb) {
         new Thread(() -> {
             try {
-                String body = httpRaw("GET", GATEWAY + "/acc/score/mission-lst", null, token);
+                String body = httpRawApp("GET", GATEWAY + "/acc/score/mission-lst", null,
+                        effectiveScoreToken(token), scoreAppType);
                 cb.onResult(new JSONObject(body), null);
             } catch (Exception e) {
                 cb.onResult(null, e.getMessage());
@@ -281,7 +370,9 @@ public class IlifeApi {
     public static void scoreLstWithToken(final String token, final JsonCallback cb) {
         new Thread(() -> {
             try {
-                String body = httpRaw("GET", GATEWAY + "/acc/score/score-lst?page=0&size=200&hasCount=1", null, token);
+                String body = httpRawApp("GET",
+                        GATEWAY + "/acc/score/score-lst?page=0&size=200&hasCount=1", null,
+                        effectiveScoreToken(token), scoreAppType);
                 cb.onResult(new JSONObject(body), null);
             } catch (Exception e) {
                 cb.onResult(null, e.getMessage());
@@ -413,16 +504,17 @@ public class IlifeApi {
                                           final String adId, final JsonCallback cb) {
         new Thread(() -> {
             try {
+                final String tk = effectiveScoreToken(token);
                 String effectiveUid = uid;
                 if (effectiveUid == null || effectiveUid.isEmpty()) {
-                    effectiveUid = fetchUidSync(token);
+                    effectiveUid = fetchUidSync(tk);
                 }
-                final String sg = sign(adId, token, effectiveUid != null ? effectiveUid : "");
+                final String sg = sign(adId, tk, effectiveUid != null ? effectiveUid : "");
                 String url = GATEWAY + "/acc/score/score-send?sign=" + sg + "&s=true";
                 JSONObject body = new JSONObject();
                 body.put("adId", adId);
                 body.put("type", 101);
-                String resp = httpRaw("POST", url, body.toString(), token);
+                String resp = httpRawApp("POST", url, body.toString(), tk, scoreAppType);
                 cb.onResult(new JSONObject(resp), null);
             } catch (Exception e) {
                 cb.onResult(null, e.getMessage());
@@ -436,16 +528,17 @@ public class IlifeApi {
                                        final JsonCallback cb) {
         new Thread(() -> {
             try {
+                final String tk = effectiveScoreToken(token);
                 String effectiveUid = uid;
                 if (effectiveUid == null || effectiveUid.isEmpty()) {
-                    effectiveUid = fetchUidSync(token);
+                    effectiveUid = fetchUidSync(tk);
                 }
-                final String sg = sign(signAdId, token, effectiveUid != null ? effectiveUid : "");
+                final String sg = sign(signAdId, tk, effectiveUid != null ? effectiveUid : "");
                 String url = GATEWAY + "/acc/score/score-send?sign=" + sg + "&s=true";
                 JSONObject body = new JSONObject();
                 body.put("weekDay", weekDay);
                 body.put("adId", signAdId);
-                String resp = httpRaw("POST", url, body.toString(), token);
+                String resp = httpRawApp("POST", url, body.toString(), tk, scoreAppType);
                 cb.onResult(new JSONObject(resp), null);
             } catch (Exception e) {
                 cb.onResult(null, e.getMessage());
