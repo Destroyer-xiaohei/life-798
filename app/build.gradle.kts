@@ -35,8 +35,8 @@ android {
         // 固定正式包名，所有本地与 CI 构建都保持一致；不要按 buildType 添加后缀。
         minSdk = 33
         targetSdk = 35
-        versionCode = 25
-        versionName = "5.5.4"
+        versionCode = 26
+        versionName = "5.5.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

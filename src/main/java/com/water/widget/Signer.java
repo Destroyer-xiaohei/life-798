@@ -33,6 +33,26 @@ public class Signer {
         }
     }
 
+    /**
+     * 支付宝小程序通道的签名：与官方 App 不同——
+     * salt 不同，且时间桶为 30 秒：F = 30 * ((now + 服务端时钟偏移) / 30000)。
+     */
+    static String signAlipay(String adId, String token, String uid, String salt, long serverOffsetMs) {
+        if (salt == null || salt.isEmpty()) {
+            return "";
+        }
+        try {
+            long now = System.currentTimeMillis() + serverOffsetMs;
+            long f = 30 * (now / 30000);
+            String e = token.length() >= 8 ? token.substring(token.length() - 8) : token;
+            String t = uid.length() >= 8 ? uid.substring(uid.length() - 8) : uid;
+            String raw = adId + f + e + t + salt;
+            return md5(raw);
+        } catch (Exception ex) {
+            return "";
+        }
+    }
+
     private static String md5(String s) {
         try {
             MessageDigest md = MessageDigest.getInstance("MD5");

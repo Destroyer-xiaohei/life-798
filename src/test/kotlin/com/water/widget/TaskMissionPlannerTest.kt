@@ -17,8 +17,9 @@ class TaskMissionPlannerTest {
         val merged = TaskMissionPlanner.merge(main, app)
 
         assertEquals(2, merged.size)
-        assertEquals(TaskPlatform.MAIN, merged[0].platform)
-        assertEquals(TaskPlatform.APP, merged[1].platform)
+        // 优先执行官方 App 通道任务
+        assertEquals(TaskPlatform.APP, merged[0].platform)
+        assertEquals(TaskPlatform.MAIN, merged[1].platform)
     }
 
     @Test

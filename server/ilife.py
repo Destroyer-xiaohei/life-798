@@ -48,6 +48,10 @@ import urllib.request
 # 默认对接慧生活798；同一套契约的白标平台可通过环境变量换成自己的网关与盐值。
 BASE_URL = (os.environ.get("ILIFE_BASE_URL") or "https://i.ilife798.com").rstrip("/")
 SIGN_SALT = os.environ.get("ILIFE_SIGN_SALT") or "aslkdvcniu34h9tgufh278wv2"
+# 支付宝小程序通道的签名盐值（与官方 App 的 SIGN_SALT 不同）
+ALIPAY_SIGN_SALT = (
+    os.environ.get("ILIFE_ALIPAY_SIGN_SALT") or "K9xP2QnR5T8wY3fA7cE1gJ4mL6oU0sZ"
+)
 # 服务端按客户端版本号做最低版本校验，过低会被平台拒绝并提示“请升级最新版app”，
 # 因此这里与官方客户端（慧生活798 3.1.9）保持一致；如需跟随平台抬高的下限，改这里或设置
 # 环境变量 ILIFE_APP_VERSION。
@@ -66,9 +70,21 @@ TYPE_TAOBAO_SHANGOU = 6
 # 积分任务提交时客户端固定带 type=101（收入）
 TYPE_SCORE_SEND = 101
 
-# ApplicationType：客户端对积分接口用 1,5（账户服务），设备接口用 1,1。
+# ApplicationType：支付宝小程序通道用 1,5，官方 App 通道用 1,1。
 APP_TYPE_MAIN = "1,5"
 APP_TYPE_APP = "1,1"
+
+# 支付宝小程序通道（1,5）的客户端标识：与支付宝 WebView 环境保持一致。
+ALIPAY_UA = (
+    "Mozilla/5.0 (Linux; Android 13; M2102J2SC Build/TKQ1.221114.001; wv) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.6478.122 "
+    "MYWeb/1.10.126.260719132528 UWS/3.22.2.9999 UCBS/3.22.2.9999_220000000000 "
+    "Mobile Safari/537.36 NebulaSDK/1.8.100112 Nebula "
+    "AlipayDefined(nt:WIFI,ws:393|0|2.75) AliApp(AP/12.12.12.8000) "
+    "AlipayClient/12.12.12.8000 Language/zh-Hans isConcaveScreen/true "
+    "Region/CNAriver/12.12.12.8000 ChannelId(6) DTN/2.0"
+)
+ALIPAY_VERSION_CODE = "2.0.178"
 
 # 服务端返回码
 CODE_OK = 0
@@ -118,6 +134,24 @@ def make_sign(ad_id: str, token: str, uid: str, local_ts: int, server_ts: int,
             offset = delta
     v20 = 10 * ((offset + int(ts)) // 10000)
     raw = "%s%d%s%s%s" % (ad_id, v20, (token or "")[-8:], (uid or "")[-8:], SIGN_SALT)
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+
+def make_sign_alipay(ad_id: str, token: str, uid: str, local_ts: int, server_ts: int,
+                     now: Optional[int] = None) -> str:
+    """支付宝小程序通道的签名：salt 不同，且时间桶为 30 秒。
+
+    F = 30 * ((serverTs - localTs + nowMs) // 30000)
+    raw = md5(adId + F + token尾8 + uid尾8 + ALIPAY_SIGN_SALT)
+    """
+    ts = now if now is not None else now_ms()
+    offset = 0
+    if server_ts > 0 and local_ts > 0:
+        delta = int(server_ts) - int(local_ts)
+        if abs(delta) <= 5 * 60 * 1000:
+            offset = delta
+    f = 30 * ((offset + int(ts)) // 30000)
+    raw = "%s%d%s%s%s" % (ad_id, f, (token or "")[-8:], (uid or "")[-8:], ALIPAY_SIGN_SALT)
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
 
@@ -202,7 +236,8 @@ class IlifeScoreClient:
 
     def __init__(self, token: str, uid: str, eid: str = "", phone: str = "",
                  version: str = APP_VERSION, timeout: int = 20,
-                 host: str = BASE_URL, app_token: str = "") -> None:
+                 host: str = BASE_URL, app_token: str = "",
+                 app_type: str = APP_TYPE_MAIN) -> None:
         self.base_url = (host or BASE_URL).rstrip("/")
         self.token = (token or "").strip()
         # 第二个 token（小程序 / 官方 App 登录态）。与 token 不同时，客户端会把两套
@@ -212,6 +247,7 @@ class IlifeScoreClient:
         self.eid = (eid or "").strip()
         self.phone = (phone or "").strip()
         self.version = version
+        self.app_type = app_type or APP_TYPE_MAIN
         self.timeout = timeout
         self.local_ts = 0
         self.server_ts = 0
@@ -224,8 +260,7 @@ class IlifeScoreClient:
     def _app_client_for(self) -> Optional["IlifeScoreClient"]:
         """第二个 token 的客户端；没有第二套 token 时返回 None。
 
-        客户端对积分接口（mission-lst / score-lst / score-send）统一使用
-        ApplicationType=1,5，只有设备接口才用 1,1，所以两个 token 走同一套请求头。
+        支付宝 token 走 1,5（支付宝小程序标识），官方 App token 走 1,1。
         """
         if not self.app_token or self.app_token == self.token:
             return None
@@ -238,19 +273,33 @@ class IlifeScoreClient:
                 version=self.version,
                 timeout=self.timeout,
                 host=self.base_url,
+                app_type=APP_TYPE_APP,
             )
         self._app_client.rate_limit_wait = self.rate_limit_wait
         return self._app_client
 
     # ---------------------------------------------------------------- 基础
-    def _headers(self, app_type: str = APP_TYPE_MAIN) -> Dict[str, str]:
-        headers = {
-            "ApplicationType": app_type,
-            "VersionCode": self.version,
-            "user-agent": "Android_ilife798_%s" % self.version,
-            "Accept-Language": "zh-Hans-CN;q=1",
-            "Content-Type": "application/json",
-        }
+    def _headers(self, app_type: Optional[str] = None) -> Dict[str, str]:
+        at = app_type or self.app_type
+        if at == APP_TYPE_APP:
+            # 官方 App 通道：Android_ilife798_<版本>
+            headers = {
+                "ApplicationType": at,
+                "VersionCode": self.version,
+                "user-agent": "Android_ilife798_%s" % self.version,
+                "Accept-Language": "zh-Hans-CN;q=1",
+                "Content-Type": "application/json",
+            }
+        else:
+            # 支付宝小程序通道：伪装成支付宝 WebView 客户端
+            headers = {
+                "ApplicationType": at,
+                "VersionCode": ALIPAY_VERSION_CODE,
+                "user-agent": ALIPAY_UA,
+                "x-release-type": "ONLINE",
+                "Accept-Language": "zh-Hans-CN;q=1",
+                "Content-Type": "application/json",
+            }
         if self.token:
             headers["Authorization"] = self.token
         return headers
@@ -258,7 +307,7 @@ class IlifeScoreClient:
     def _call(self, method: str, path: str,
               params: Optional[Dict[str, Any]] = None,
               body: Optional[Dict[str, Any]] = None,
-              app_type: str = APP_TYPE_MAIN) -> Dict[str, Any]:
+              app_type: Optional[str] = None) -> Dict[str, Any]:
         status, raw = _http(method, self.base_url + path, self._headers(app_type),
                             params, body, self.timeout)
         text = raw.decode("utf-8", "replace") if raw else ""
@@ -298,7 +347,12 @@ class IlifeScoreClient:
         return ("升级" in (msg or "")) or ("版本" in (msg or ""))
 
     def resolve_version(self, emit: Callable[..., None]) -> Optional[Dict[str, Any]]:
-        """探测一个被服务端接受的客户端版本号，命中后更新 self.version 并返回任务列表响应。"""
+        """探测一个被服务端接受的客户端版本号，命中后更新 self.version 并返回任务列表响应。
+
+        仅适用于官方 App 通道；支付宝小程序通道固定使用 ALIPAY_VERSION_CODE，无需探测。
+        """
+        if self.app_type != APP_TYPE_APP:
+            return None
         seen = set()
         for v in (self.version,) + self.VERSION_CANDIDATES:
             if not v or v in seen:
@@ -363,14 +417,20 @@ class IlifeScoreClient:
           * 每日签到  body = { adId, weekDay: 1..7 }  （大写 D）
         不要再附带 addScore / addScoreType / token —— 签到带上它们会判为无效请求。
         """
-        sign = make_sign(ad_id, self.token, self.uid, self.local_ts, self.server_ts)
+        if self.app_type == APP_TYPE_APP:
+            sign = make_sign(ad_id, self.token, self.uid, self.local_ts, self.server_ts)
+        else:
+            sign = make_sign_alipay(ad_id, self.token, self.uid,
+                                    self.local_ts, self.server_ts)
         body: Dict[str, Any] = {"adId": ad_id}
         if type_ is not None:
             body["type"] = int(type_)
         if week_day is not None:
             body["weekDay"] = int(week_day)
+        # 官方 App 通道用 s=1；支付宝小程序通道沿用 s=true。
+        s_flag = "1" if self.app_type == APP_TYPE_APP else "true"
         return self._call("POST", "/api/v1/acc/score/score-send",
-                          params={"sign": sign, "s": "true"}, body=body)
+                          params={"sign": sign, "s": s_flag}, body=body)
 
     # ------------------------------------------------------------ 领取引擎
     def claim_all(self, log: Callable[..., None], delay: float = 6.0,

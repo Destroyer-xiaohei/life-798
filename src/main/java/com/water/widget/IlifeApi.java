@@ -49,6 +49,44 @@ public class IlifeApi {
     private static final String DEVICE_LOGIN_REJECTED_MESSAGE =
             "设备登录信息未被接受，请检查是否填反或重新完成设备登录";
 
+    // 支付宝小程序通道（ApplicationType = 1,5）的客户端标识：与支付宝 WebView 环境一致。
+    private static final String ALIPAY_UA =
+            "Mozilla/5.0 (Linux; Android 13; M2102J2SC Build/TKQ1.221114.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.6478.122 MYWeb/1.10.126.260719132528 UWS/3.22.2.9999 UCBS/3.22.2.9999_220000000000 Mobile Safari/537.36 NebulaSDK/1.8.100112 Nebula AlipayDefined(nt:WIFI,ws:393|0|2.75) AliApp(AP/12.12.12.8000) AlipayClient/12.12.12.8000 Language/zh-Hans isConcaveScreen/true Region/CNAriver/12.12.12.8000 ChannelId(6) DTN/2.0";
+    private static final String ALIPAY_VERSION_CODE = "2.0.178";
+    // 支付宝小程序通道的签名盐值（与官方 App 的 SIGN_SALT 不同）
+    private static final String ALIPAY_SIGN_SALT = "K9xP2QnR5T8wY3fA7cE1gJ4mL6oU0sZ";
+    // 服务端时间与本地时间的偏移（毫秒），用于签名时间桶
+    private static volatile long serverTimeOffsetMs = 0L;
+
+    private static void recordServerTime(JSONObject body) {
+        if (body == null) {
+            return;
+        }
+        long st = body.optLong("time", 0L);
+        if (st <= 0) {
+            return;
+        }
+        if (st < 100_000_000_000L) {
+            st *= 1000;
+        }
+        long local = System.currentTimeMillis();
+        if (Math.abs(st - local) <= 5 * 60_000L) {
+            serverTimeOffsetMs = st - local;
+        }
+    }
+
+    /** 支付宝小程序通道的签名（salt 与时间桶均不同于官方 App）。 */
+    static String alipaySign(String adId, String token, String uid) {
+        return Signer.signAlipay(adId, token, uid, ALIPAY_SIGN_SALT, serverTimeOffsetMs);
+    }
+
+    private static String scoreSign(String adId, String token, String uid) {
+        if ("1,5".equals(appTypeForToken(token))) {
+            return alipaySign(adId, token, uid);
+        }
+        return sign(adId, token, uid);
+    }
+
     public interface ImgCallback {
         void onResult(byte[] bytes, String err);
     }
@@ -71,8 +109,10 @@ public class IlifeApi {
     // 而旧客户端用「积分 token + 1,5」。进入前台时自动探测一组可用组合并持久化。
     private static volatile String scorePointsToken = "";
     private static volatile String scoreAppToken = "";
-    private static volatile boolean scoreUseAppToken = false;
-    private static volatile String scoreAppType = "1,5";
+    // 默认对齐官方 App 通道：设备登录 token + ApplicationType 1,1；
+    // 支付宝积分通道(1,5)保持不变，作为自动探测的候选。
+    private static volatile boolean scoreUseAppToken = true;
+    private static volatile String scoreAppType = "1,1";
 
     public static String getScoreAppType() {
         return scoreAppType;
@@ -94,26 +134,41 @@ public class IlifeApi {
         scoreUseAppToken = useAppToken;
     }
 
+    // 按传入 token 判定所属通道：设备登录 token → 1,1（官方 App 通道）；积分 token → 1,5（支付宝，保持不变）。
+    private static String appTypeForToken(String token) {
+        if (token != null && !token.isEmpty()) {
+            if (!scoreAppToken.isEmpty() && token.equals(scoreAppToken)) return "1,1";
+            if (!scorePointsToken.isEmpty() && token.equals(scorePointsToken)) return "1,5";
+        }
+        return scoreAppType;
+    }
+
     private static String effectiveScoreToken(String passed) {
-        if (scoreUseAppToken && !scoreAppToken.isEmpty()) return scoreAppToken;
+        if (passed != null && !passed.isEmpty()) return passed;
+        if (!scoreAppToken.isEmpty()) return scoreAppToken;
         if (!scorePointsToken.isEmpty()) return scorePointsToken;
-        return passed == null ? "" : passed;
+        return "";
+    }
+
+    // 官方 App 通道(1,1)用 s=1；支付宝积分通道(1,5)沿用 s=true（保持不变）。
+    private static String scoreSendFlag(String token) {
+        return "1,1".equals(appTypeForToken(token)) ? "1" : "true";
     }
 
     /**
      * 探测积分接口可用的 token / ApplicationType / 版本组合，命中后写入
      * {@link #applyScoreChannel} 与 {@link #setClientVersion}。
-     * 组合顺序：积分token+1,5（旧行为）→ 设备token+1,1（官方行为）→ 交叉。
+     * 组合顺序：设备token+1,1（官方行为）→ 设备token+1,5 → 积分token+1,5（旧行为）→ 积分token+1,1。
      */
     public static void detectScoreChannel(final String pointsToken, final String appToken,
                                           final VersionCallback cb) {
         setScoreTokens(pointsToken, appToken);
         new Thread(() -> {
             String[][] combos = {
-                    {pointsToken, "1,5", "0"},
                     {appToken, "1,1", "1"},
-                    {pointsToken, "1,1", "0"},
                     {appToken, "1,5", "1"},
+                    {pointsToken, "1,5", "0"},
+                    {pointsToken, "1,1", "0"},
             };
             String[] versions = {clientVersion, "3.1.7", "3.1.9", "3.1.10", "3.2.0"};
             for (String[] combo : combos) {
@@ -315,8 +370,10 @@ public class IlifeApi {
         new Thread(() -> {
             try {
                 String body = httpRawApp("GET", GATEWAY + "/acc/score/mission-lst", null,
-                        effectiveScoreToken(token), scoreAppType);
-                cb.onResult(new JSONObject(body), null);
+                        token, appTypeForToken(token));
+                JSONObject json = new JSONObject(body);
+                recordServerTime(json);
+                cb.onResult(json, null);
             } catch (Exception e) {
                 cb.onResult(null, e.getMessage());
             }
@@ -372,8 +429,10 @@ public class IlifeApi {
             try {
                 String body = httpRawApp("GET",
                         GATEWAY + "/acc/score/score-lst?page=0&size=200&hasCount=1", null,
-                        effectiveScoreToken(token), scoreAppType);
-                cb.onResult(new JSONObject(body), null);
+                        token, appTypeForToken(token));
+                JSONObject json = new JSONObject(body);
+                recordServerTime(json);
+                cb.onResult(json, null);
             } catch (Exception e) {
                 cb.onResult(null, e.getMessage());
             }
@@ -509,12 +568,12 @@ public class IlifeApi {
                 if (effectiveUid == null || effectiveUid.isEmpty()) {
                     effectiveUid = fetchUidSync(tk);
                 }
-                final String sg = sign(adId, tk, effectiveUid != null ? effectiveUid : "");
-                String url = GATEWAY + "/acc/score/score-send?sign=" + sg + "&s=true";
+                final String sg = scoreSign(adId, tk, effectiveUid != null ? effectiveUid : "");
+                String url = GATEWAY + "/acc/score/score-send?sign=" + sg + "&s=" + scoreSendFlag(tk);
                 JSONObject body = new JSONObject();
                 body.put("adId", adId);
                 body.put("type", 101);
-                String resp = httpRawApp("POST", url, body.toString(), tk, scoreAppType);
+                String resp = httpRawApp("POST", url, body.toString(), tk, appTypeForToken(tk));
                 cb.onResult(new JSONObject(resp), null);
             } catch (Exception e) {
                 cb.onResult(null, e.getMessage());
@@ -533,12 +592,12 @@ public class IlifeApi {
                 if (effectiveUid == null || effectiveUid.isEmpty()) {
                     effectiveUid = fetchUidSync(tk);
                 }
-                final String sg = sign(signAdId, tk, effectiveUid != null ? effectiveUid : "");
-                String url = GATEWAY + "/acc/score/score-send?sign=" + sg + "&s=true";
+                final String sg = scoreSign(signAdId, tk, effectiveUid != null ? effectiveUid : "");
+                String url = GATEWAY + "/acc/score/score-send?sign=" + sg + "&s=" + scoreSendFlag(tk);
                 JSONObject body = new JSONObject();
                 body.put("weekDay", weekDay);
                 body.put("adId", signAdId);
-                String resp = httpRawApp("POST", url, body.toString(), tk, scoreAppType);
+                String resp = httpRawApp("POST", url, body.toString(), tk, appTypeForToken(tk));
                 cb.onResult(new JSONObject(resp), null);
             } catch (Exception e) {
                 cb.onResult(null, e.getMessage());
@@ -548,7 +607,7 @@ public class IlifeApi {
 
     /**
      * 完成任务（带签名）。
-     * POST /acc/score/score-send?sign=<sign>&s=true  body={adId, type:101}
+     * POST /acc/score/score-send?sign=<sign>&s=1  body={adId, type:101}
      */
     public static void scoreSend(final Context ctx, final String adId, final JsonCallback cb) {
         new Thread(() -> {
@@ -557,25 +616,26 @@ public class IlifeApi {
                 cb.onResult(null, "未登录");
                 return;
             }
+            final String tk = effectiveScoreToken(acc.token);
             // 确保 uid 存在
             String uid = acc.uid;
             if (uid == null || uid.isEmpty()) {
                 // 同步取 uid
-                uid = fetchUidSync(acc.token);
+                uid = fetchUidSync(tk);
                 if (uid != null && !uid.isEmpty()) {
                     acc.uid = uid;
                     AccountStore.updateCurrent(ctx, acc);
                 }
             }
-            final String sg = sign(adId, acc.token, uid != null ? uid : "");
-            String url = GATEWAY + "/acc/score/score-send?sign=" + sg + "&s=true";
+            final String sg = scoreSign(adId, tk, uid != null ? uid : "");
+            String url = GATEWAY + "/acc/score/score-send?sign=" + sg + "&s=" + scoreSendFlag(tk);
             JSONObject body = new JSONObject();
             try {
                 body.put("adId", adId);
                 body.put("type", 101);
             } catch (Exception ignored) {}
             try {
-                String resp = httpRaw("POST", url, body.toString(), acc.token);
+                String resp = httpRawApp("POST", url, body.toString(), tk, appTypeForToken(tk));
                 cb.onResult(new JSONObject(resp), null);
             } catch (Exception e) {
                 cb.onResult(null, e.getMessage());
@@ -926,12 +986,20 @@ public class IlifeApi {
             c.setRequestMethod(method);
             c.setConnectTimeout(15000);
             c.setReadTimeout(15000);
-            c.setRequestProperty("User-Agent", "Android_ilife798_" + version);
+            // ApplicationType=1,5 为支付宝小程序通道，请求头伪装成支付宝 WebView 客户端；
+            // 其余为官方 App 通道。
+            boolean alipayChannel = "1,5".equals(appType);
+            if (alipayChannel) {
+                c.setRequestProperty("User-Agent", ALIPAY_UA);
+                c.setRequestProperty("VersionCode", ALIPAY_VERSION_CODE);
+                c.setRequestProperty("x-release-type", "ONLINE");
+            } else {
+                c.setRequestProperty("User-Agent", "Android_ilife798_" + version);
+                c.setRequestProperty("VersionCode", version);
+            }
             c.setRequestProperty("Content-Type", "application/json");
             c.setRequestProperty("ApplicationType", appType);
             c.setRequestProperty("Accept-Language", "zh-Hans-CN;q=1");
-            // 与官方客户端一致：所有接口都需要携带版本号，否则会被判为旧版
-            c.setRequestProperty("VersionCode", version);
             if (token != null && !token.isEmpty()) {
                 c.setRequestProperty("Authorization", token);
             }

@@ -42,8 +42,9 @@ object TaskMissionPlanner {
             }
         }
 
-        addAll(mainMissions, TaskPlatform.MAIN)
+        // 优先执行官方 App 通道任务，再执行支付宝通道任务
         addAll(appMissions, TaskPlatform.APP)
+        addAll(mainMissions, TaskPlatform.MAIN)
         return out
     }
 
