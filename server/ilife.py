@@ -51,7 +51,7 @@ SIGN_SALT = os.environ.get("ILIFE_SIGN_SALT") or "aslkdvcniu34h9tgufh278wv2"
 # 服务端按客户端版本号做最低版本校验，过低会被平台拒绝并提示“请升级最新版app”，
 # 因此这里与官方客户端（慧生活798 3.1.9）保持一致；如需跟随平台抬高的下限，改这里或设置
 # 环境变量 ILIFE_APP_VERSION。
-APP_VERSION = os.environ.get("ILIFE_APP_VERSION") or "3.1.9"
+APP_VERSION = os.environ.get("ILIFE_APP_VERSION") or "3.1.7"
 
 CN_TZ = timezone(timedelta(hours=8))
 
@@ -286,6 +286,7 @@ class IlifeScoreClient:
     # 平台随官方 App 更新抬高最低版本下限：低于下限时返回“请升级最新版app”。
     # 候选版本按顺序尝试，命中（code=0 或非版本类错误）即采用。
     VERSION_CANDIDATES = (
+        "3.1.7", "3.1.8", "3.1.6", "3.1.5", "3.1.9",
         "3.1.10", "3.1.11", "3.1.12", "3.1.13", "3.1.14", "3.1.15",
         "3.2.0", "3.2.1", "3.2.2", "3.2.3", "3.2.4", "3.2.5", "3.2.6",
         "3.3.0", "3.3.1", "3.4.0", "3.5.0", "3.6.0", "3.8.0", "3.9.9",

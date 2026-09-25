@@ -30,7 +30,7 @@ public class IlifeApi {
     // 服务端按客户端版本号做最低版本校验，过低会返回“请升级最新版app”。
     // 平台会随官方 App 更新抬高下限，因此这里运行时可调，并通过 ensureClientVersion 自动探测
     // 一个被服务端接受的版本（探测结果会持久化）。
-    public static final String DEFAULT_CLIENT_VERSION = "3.1.9";
+    public static final String DEFAULT_CLIENT_VERSION = "3.1.7";
     private static volatile String clientVersion = DEFAULT_CLIENT_VERSION;
 
     public static String getClientVersion() {
@@ -78,8 +78,11 @@ public class IlifeApi {
                 cb.onResult(clientVersion, null);
                 return;
             }
+            // 官方客户端上报的是 versionName（当前为 3.1.7），平台要求与官方最新版一致；
+            // 先试当前值，再按已知官方版本与邻近版本逐个尝试。
             String[] candidates = {
                     clientVersion,
+                    "3.1.7", "3.1.8", "3.1.6", "3.1.5", "3.1.9",
                     "3.1.10", "3.1.11", "3.1.12", "3.1.13", "3.1.14", "3.1.15",
                     "3.2.0", "3.2.1", "3.2.2", "3.2.3", "3.2.4", "3.2.5", "3.2.6",
                     "3.3.0", "3.3.1", "3.4.0", "3.5.0", "3.6.0", "3.8.0", "3.9.9",
